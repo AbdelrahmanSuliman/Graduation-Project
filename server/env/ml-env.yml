@@ -12,7 +12,9 @@ dependencies:
   - jupyter
   - pip
   - pip:
-      - opencv-python
-      - fastapi
-      - python-dotenv
-      - mediapipe
+    - pytorch-lightning
+    - pandas
+    - opencv-python
+    - fastapi
+    - python-dotenv
+    - mediapipe
