@@ -3,7 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 import torch
 import json
 from services.classifier import classifier_service
-from model.model import HybridNeuMF
+from models.model import HybridNeuMF
 
 app = FastAPI()
 
