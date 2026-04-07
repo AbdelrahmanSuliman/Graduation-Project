@@ -63,12 +63,6 @@ class FaceShapeClassifier:
             
             processed_image = image.crop(new_box)
             
-            os.makedirs("debug_crops", exist_ok=True)
-            processed_image.save("debug_crops/latest_processed_face.jpg")
-            print(f"📸 Debug: Soft square crop saved to 'debug_crops/latest_processed_face.jpg'")
-        else:
-            print("⚠️ MTCNN could not detect a face; processing full image as fallback.")
-
         inputs = self.processor(images=processed_image, return_tensors="pt")
         
         with torch.no_grad():
