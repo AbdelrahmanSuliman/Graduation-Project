@@ -4,6 +4,9 @@ import torch
 import json
 from services.classifier import classifier_service
 from models.model import HybridNeuMF
+from pydantic import BaseModel
+from database.database import save_user_feedback
+from database.database import save_user_feedback, init_db
 
 app = FastAPI()
 
@@ -16,23 +19,28 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# --- STEP 1: LOAD DATA AND DEFINE CONSTANTS ---
+@app.on_event("startup")
+async def startup_event():
+    init_db()
 try:
-    with open("glasses_database.json", "r") as f:
+    with open("./database/glasses_database.json", "r") as f:
         glasses_db = json.load(f)
-    print(f" ✅ Loaded {len(glasses_db)} glasses from database.")
+    print(f" Loaded {len(glasses_db)} glasses from database.")
 except FileNotFoundError:
     print(" ❌ ERROR: glasses_database.json not found!")
     glasses_db = {}
 
-# These must be defined BEFORE the model initialization
 NUM_SHAPES = 5
 NUM_ITEMS = len(glasses_db) if glasses_db else 45
 FACE_MAP = {"Heart": 0, "Oblong": 1, "Oval": 2, "Round": 3, "Square": 4}
 
-# --- STEP 2: INITIALIZE THE MODEL ---
+class FeedbackRequest(BaseModel):
+    glass_id: int
+    detected_face_shape: int
+    features: list[float]
+    liked:bool
+
 try:
-    # Notice we use the 5-feature count to match your model.py
     model = HybridNeuMF(
         num_face_shapes=NUM_SHAPES, 
         num_items=NUM_ITEMS, 
@@ -46,7 +54,6 @@ except Exception as e:
     print(f" ❌ CRITICAL: Could not load model. Error: {e}")
     model = None
 
-# --- STEP 3: ENDPOINTS ---
 
 @app.post("/recommend")
 async def recommend_glasses(
@@ -108,31 +115,33 @@ async def recommend_glasses(
             })
         
         scored_items.sort(key=lambda x: x["score"], reverse=True)
+        print("--- TOP 5 RECOMMENDATIONS ---")
+        for item in scored_items[:5]:
+            print(item)
+
+        print("\n--- BOTTOM 5 RECOMMENDATIONS ---")
+        for item in scored_items[-5:]:
+            print(item)
 
         return {
             "status": "success",
             "detected_face_shape": face_shape, 
-            "top_matches": scored_items[:5] 
+            "top_matches": scored_items[:5],
+            "detected_face_shape_id": shape_id
         }
 
     except Exception as e:
-        print(f"🔥 Recommendation Error: {e}")
+        print(f"Recommendation Error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
     
-@app.post("/classify-face")
-async def classify_face_endpoint(file: UploadFile = File(...)):
-    if not file.content_type.startswith("image/"):
-        raise HTTPException(status_code=400, detail="File must be an image.")
 
-    try:
-        contents = await file.read()
-        face_shape = classifier_service.predict(contents)
-        
-        return {
-            "filename": file.filename,
-            "face_shape": face_shape,
-            "message": f"Successfully detected {face_shape} face."
-        }
-    except Exception as e:
-        print(f"Error processing image: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+    
+@app.post("/feedback")
+async def post_feedback(request: FeedbackRequest):
+    save_user_feedback(
+        glass_id=request.glass_id,
+        shape_id=request.detected_face_shape,
+        features=request.features,
+        liked=request.liked
+    )
+    return {"status": "success"}

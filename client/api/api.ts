@@ -1,27 +1,40 @@
-import api from "lib/axios";
 
-type Recommendation = {
-  file: File ;
-  features: {
-    cheek_jaw_ratio: number;
-    face_hw_ratio: number;
-    midface_ratio: number;
-  };
-};
+const API_BASE = "http://localhost:8000";
 
 export const getRecommendations = async ({
   file,
   features,
-}: Recommendation) => {
+}: {
+  file: File;
+  features: any;
+}) => {
   const formData = new FormData();
-
   formData.append("file", file);
   formData.append("features", JSON.stringify(features));
 
-  console.log(formData.get("file"));
-  console.log(formData.get("features"));
+  const response = await fetch(`${API_BASE}/recommend`, {
+    method: "POST",
+    body: formData,
+  });
 
-  const res = await api.post("/recommend", formData);
+  if (!response.ok) {
+    throw new Error("Failed to get recommendations from the server.");
+  }
+  return response.json();
+};
 
-  return res.data;
+export const submitFeedback = async (feedbackData: {
+  glass_id: number;
+  detected_face_shape: number;
+  features: number[]; 
+  liked: boolean;
+}) => {
+  const response = await fetch(`${API_BASE}/feedback`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(feedbackData),
+  });
+
+  if (!response.ok) throw new Error("Failed to submit feedback.");
+  return response.json();
 };
