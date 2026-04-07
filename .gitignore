@@ -141,3 +141,6 @@ vite.config.ts.timestamp-*
 .vite/
 
 dataset/
+debug_crops/
+public/
+

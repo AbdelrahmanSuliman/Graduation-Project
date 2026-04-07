@@ -56,6 +56,13 @@ export default function Home() {
     if (!biometrics) {
       throw new Error("Could not calculate facial geometry.");
     }
+    const face = results.faceLandmarks[0];
+    const arAnchors = {
+      leftEye: face[33],
+      rightEye: face[263],
+      nose: face[168]
+    };
+    sessionStorage.setItem("ar_anchors", JSON.stringify(arAnchors));
 
     return biometrics;
   };
