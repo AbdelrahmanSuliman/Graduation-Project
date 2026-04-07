@@ -1,0 +1,6 @@
+factor_num: 32
+lr: 0.001
+num_client_features: 3
+num_face_shapes: 5
+num_item_features: 5
+num_items: 45

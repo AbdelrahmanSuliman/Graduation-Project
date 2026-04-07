@@ -4,10 +4,11 @@ import pytorch_lightning as pl
 import torch.optim as optim
 
 class HybridNeuMF(pl.LightningModule):
-    def __init__(self, num_face_shapes, num_items, num_client_features=3, num_item_features=5, factor_num=32, lr=0.005):
+    def __init__(self, num_face_shapes, num_items, num_client_features=4, num_item_features=5, factor_num=32, lr=0.005, epochs=30):
         super().__init__()
         self.save_hyperparameters()
         self.lr = lr
+        self.epochs = epochs
 
         self.embed_shape_GMF = nn.Embedding(num_face_shapes, factor_num)
         self.embed_item_GMF = nn.Embedding(num_items, factor_num)
@@ -25,20 +26,25 @@ class HybridNeuMF(pl.LightningModule):
             nn.ReLU()
         )
 
+        # Added Dropout to prevent overfitting on complex engineered continuous features
         self.mlp = nn.Sequential(
-            nn.Linear(factor_num * 4, 64),
+            nn.Linear(factor_num * 4, 128),
+            nn.BatchNorm1d(128),
+            nn.ReLU(),
+            nn.Dropout(0.2),
+            nn.Linear(128, 64),
+            nn.BatchNorm1d(64),
             nn.ReLU(),
             nn.Dropout(0.2),
             nn.Linear(64, 32),
-            nn.ReLU(),
-            nn.Dropout(0.2),
-            nn.Linear(32, 16),
             nn.ReLU()
         )
 
-        self.predict_layer = nn.Linear(factor_num + 16, 1)
-        self.sig = nn.Sigmoid()
+        # FIXED: Removed the overwriting layer. 
+        # GMF outputs 32, MLP outputs 32 -> Total input is 64
+        self.predict_layer = nn.Linear(factor_num + 32, 1)
         
+        # FIXED: Swapped Binary Cross Entropy for Mean Squared Error
         self.criterion = nn.MSELoss() 
         
         self.apply(self._init_weights)
@@ -65,7 +71,9 @@ class HybridNeuMF(pl.LightningModule):
         out_mlp = self.mlp(input_mlp)
 
         combined = torch.cat([out_gmf, out_mlp], dim=-1)
-        return self.sig(self.predict_layer(combined)).squeeze()
+        
+        # FIXED: Removed Sigmoid. We want the raw continuous regression score.
+        return self.predict_layer(combined).squeeze()
 
     def training_step(self, batch, batch_idx):
         s, it, cf, itf, target = batch
@@ -76,5 +84,6 @@ class HybridNeuMF(pl.LightningModule):
 
     def configure_optimizers(self):
         optimizer = optim.AdamW(self.parameters(), lr=self.lr, weight_decay=1e-4)
-        scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=100)
+        # FIXED: T_max now accurately reflects your max_epochs to decay properly
+        scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=self.epochs)
         return [optimizer], [scheduler]
