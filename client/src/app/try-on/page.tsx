@@ -14,6 +14,8 @@ const LM = {
   NOSE_BRIDGE: 168,
   LEFT_TEMPLE: 234,
   RIGHT_TEMPLE: 454,
+  LEFT_PUPIL: 468,
+  RIGHT_PUPIL: 473,
 } as const;
 
 function toWorld(
@@ -36,6 +38,10 @@ export default function TryOnPage() {
   const [modelLoading, setModelLoading] = useState(false);
   const [webcamError, setWebcamError] = useState<string | null>(null);
   const [sceneReady, setSceneReady] = useState(false);
+  
+  // Model Orientation Toggle
+  const [isFlipped, setIsFlipped] = useState(false);
+  const isFlippedRef = useRef(false);
 
   // DOM refs
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -54,6 +60,12 @@ export default function TryOnPage() {
   const lastVideoTimeRef = useRef(-1);
   const streamRef = useRef<MediaStream | null>(null);
 
+  // Toggle model flip dynamically
+  const handleFlipModel = () => {
+    isFlippedRef.current = !isFlippedRef.current;
+    setIsFlipped(isFlippedRef.current);
+  };
+
   // ── 1. Load session data ──────────────────────────────────────────────────
   useEffect(() => {
     const storedRes = sessionStorage.getItem("ai_recommendations");
@@ -68,13 +80,11 @@ export default function TryOnPage() {
 
   // ── 2. Bootstrap: init Three.js + webcam + MediaPipe, then start loop ─────
   useEffect(() => {
-    // We must wait for data to load so the early return finishes and the canvas is mounted
     if (!data) return;
 
     const canvas = overlayCanvasRef.current;
     if (!canvas) return;
 
-    // Use setTimeout so the DOM has completely painted its initial flex layout
     const timeoutId = setTimeout(() => {
       // ── Init Three.js ───────────────────────────────────────────────────
       const cW = canvas.clientWidth || 640;
@@ -86,7 +96,6 @@ export default function TryOnPage() {
         antialias: true,
       });
       renderer.setPixelRatio(window.devicePixelRatio);
-      // Pass false to avoid overriding the CSS w-full h-full dimensions
       renderer.setSize(cW, cH, false);
       renderer.setClearColor(0x000000, 0);
 
@@ -105,19 +114,19 @@ export default function TryOnPage() {
       camera.position.set(0, 0, 10);
       camera.lookAt(0, 0, 0);
 
-      // Enhance lighting so materials remain visible regardless of color
-      scene.add(new THREE.AmbientLight(0xffffff, 2.5));
-      const dirLight = new THREE.DirectionalLight(0xffffff, 3.0);
-      dirLight.position.set(0, 5, 10);
+      // Enhance lighting so the clear glass material catches reflections
+      scene.add(new THREE.AmbientLight(0xffffff, 2.0));
+      const dirLight = new THREE.DirectionalLight(0xffffff, 3.5);
+      dirLight.position.set(2, 5, 10);
       scene.add(dirLight);
-      const fillLight = new THREE.DirectionalLight(0xeef4ff, 1.5);
-      fillLight.position.set(-5, -2, 8);
+      const fillLight = new THREE.DirectionalLight(0xeef4ff, 2.5);
+      fillLight.position.set(-5, -2, 5);
       scene.add(fillLight);
 
       rendererRef.current = renderer;
       sceneRef.current = scene;
       cameraRef.current = camera;
-      setSceneReady(true); // Now we can safely load models
+      setSceneReady(true);
       
       // ── Start rendering loop ────────────────────────────────────────────
       const loop = () => {
@@ -138,9 +147,6 @@ export default function TryOnPage() {
           if (result.faceLandmarks?.length && glasses) {
             const marks = result.faceLandmarks[0];
 
-            // 1. Math to correct the object-cover video crop
-            // MediaPipe gives [0,1] coord based on the RAW video source.
-            // Our video element is forced to object-cover the container.
             const wC = rendererDOM.clientWidth;
             const hC = rendererDOM.clientHeight;
             const vW = video.videoWidth || 1280;
@@ -161,57 +167,46 @@ export default function TryOnPage() {
             const xOffset = (renderedW - wC) / 2;
             const yOffset = (renderedH - hC) / 2;
 
-            // mapC maps raw MediaPipe coords to Canvas coords correctly
             const mapC = (raw: any) => ({
               x: (raw.x * renderedW - xOffset) / wC,
               y: (raw.y * renderedH - yOffset) / hC,
-              z: raw.z, // retain native depth metric
+              z: raw.z,
             });
 
-            const leftEyeRaw = marks[LM.LEFT_EYE_OUTER];
-            const rightEyeRaw = marks[LM.RIGHT_EYE_OUTER];
-            const noseRaw = marks[LM.NOSE_BRIDGE];
             const leftTempleRaw = marks[LM.LEFT_TEMPLE];
             const rightTempleRaw = marks[LM.RIGHT_TEMPLE];
+            const noseRaw = marks[LM.NOSE_BRIDGE];
+            const leftPupilRaw = marks[LM.LEFT_PUPIL];
+            const rightPupilRaw = marks[LM.RIGHT_PUPIL];
 
-            const leftEyeScreen = mapC(leftEyeRaw);
-            const rightEyeScreen = mapC(rightEyeRaw);
-            const noseScreen = mapC(noseRaw);
-            const leftTempleScreen = mapC(leftTempleRaw);
-            const rightTempleScreen = mapC(rightTempleRaw);
+            const leftTempleW = toWorld(mapC(leftTempleRaw).x, mapC(leftTempleRaw).y, camera);
+            const rightTempleW = toWorld(mapC(rightTempleRaw).x, mapC(rightTempleRaw).y, camera);
+            const leftPupilW = toWorld(mapC(leftPupilRaw).x, mapC(leftPupilRaw).y, camera);
+            const rightPupilW = toWorld(mapC(rightPupilRaw).x, mapC(rightPupilRaw).y, camera);
 
-            const leftEyeW = toWorld(leftEyeScreen.x, leftEyeScreen.y, camera);
-            const rightEyeW = toWorld(rightEyeScreen.x, rightEyeScreen.y, camera);
-            const noseW = toWorld(noseScreen.x, noseScreen.y, camera);
-            const leftTempleW = toWorld(leftTempleScreen.x, leftTempleScreen.y, camera);
-            const rightTempleW = toWorld(rightTempleScreen.x, rightTempleScreen.y, camera);
-
-            // Compute face transforms
-            const eyeMidX = (leftEyeW.x + rightEyeW.x) / 2;
-            const eyeMidY = (leftEyeW.y + rightEyeW.y) / 2;
+            const eyeMidX = (leftPupilW.x + rightPupilW.x) / 2;
+            const eyeMidY = (leftPupilW.y + rightPupilW.y) / 2;
             const faceWidth = leftTempleW.distanceTo(rightTempleW);
 
-            // Roll: math.atan2(y, x). User's physical right eye is on the left side of unmirrored screen
-            // so leftEyeW.x > rightEyeW.x, generating a default roll of 0!
-            const roll = Math.atan2(
-              leftEyeW.y - rightEyeW.y,
-              leftEyeW.x - rightEyeW.x,
-            );
+            // Shift the glasses down slightly to rest on the nose bridge.
+            // Using a percentage of faceWidth keeps the offset accurate at any distance.
+            const verticalOffset = faceWidth * 0.065; 
+            const finalY = eyeMidY - verticalOffset;
+
+            const dx = leftPupilW.x - rightPupilW.x;
+            const dy = leftPupilW.y - rightPupilW.y;
+            const roll = Math.atan2(dy, dx);
             
-            // Pitch: rotate up/down depending on nose depth. 
-            const pitch = (noseRaw.z - (leftEyeRaw.z + rightEyeRaw.z) * 0.5) * 2.5;
-            
-            // Yaw: rotate left/right
+            const pitch = (noseRaw.z - (leftPupilRaw.z + rightPupilRaw.z) * 0.5) * 2.5;
             const faceCenterRawX = (leftTempleRaw.x + rightTempleRaw.x) / 2;
             const yaw = -(noseRaw.x - faceCenterRawX) * Math.PI * 1.5;
 
-            // Rest glasses slightly above nose
-            const eyeToNoseY = noseW.y - eyeMidY;
-            const glassesY = eyeMidY + eyeToNoseY * 0.15;
+            // Apply orientation offset if user clicked the Flip button
+            const yawOffset = isFlippedRef.current ? Math.PI : 0;
 
-            glasses.position.set(eyeMidX, glassesY, 0);
-            glasses.scale.setScalar(faceWidth * 0.95); // Adjust multiplier tighter to fit exact face width
-            glasses.rotation.set(pitch, yaw, roll);
+            glasses.position.set(eyeMidX, finalY, 0); // Replaced eyeMidY with finalY
+            glasses.scale.setScalar(faceWidth * 1.05); 
+            glasses.rotation.set(pitch, yaw + yawOffset, roll);
             glasses.visible = true;
           } else if (glasses) {
             glasses.visible = false;
@@ -267,7 +262,6 @@ export default function TryOnPage() {
         }
       };
 
-      // Ensure we immediately start mapping
       rafRef.current = requestAnimationFrame(loop);
       startCam();
       startMediaPipe();
@@ -285,8 +279,7 @@ export default function TryOnPage() {
       };
       window.addEventListener("resize", handleResize);
 
-      // Link cleanup
-      (canvas as any).__cleanup = () => {
+      return () => {
         cancelAnimationFrame(rafRef.current);
         window.removeEventListener("resize", handleResize);
         streamRef.current?.getTracks().forEach((t) => t.stop());
@@ -295,16 +288,10 @@ export default function TryOnPage() {
       };
     }, 50);
 
-    return () => {
-      clearTimeout(timeoutId);
-      const canvas = overlayCanvasRef.current;
-      if (canvas && (canvas as any).__cleanup) {
-        (canvas as any).__cleanup();
-      }
-    };
+    return () => clearTimeout(timeoutId);
   }, [data]);
 
-  // ── 3. Load / swap glasses model (gated by sceneReady) ────────────────────
+  // ── 3. Load / swap glasses model ───────────────────────────────────────────
   useEffect(() => {
     if (!sceneReady || !sceneRef.current || !activeGlass) return;
 
@@ -313,76 +300,81 @@ export default function TryOnPage() {
       glassesGroupRef.current = null;
     }
 
+    // Reset flip toggle when switching to a new glass model
+    isFlippedRef.current = false;
+    setIsFlipped(false);
     setModelLoading(true);
 
-    // Resolves model name seamlessly
     const fileName =
       activeGlass.file_name ||
       `glass_${String(activeGlass.glass_id + 1).padStart(2, "0")}`;
     const modelPath = `/models/${fileName}.obj`;
 
-    console.log("Loading model:", modelPath);
-
     loaderRef.current.load(
       modelPath,
       (obj) => {
-        // We use nested groups to perfectly center and scale the model
         const mainGroup = new THREE.Group();
-        const scaleWrapper = new THREE.Group();
 
-        // Apply a realistic material fallback since OBJ files don't have materials included natively here
-        const defaultMat = new THREE.MeshStandardMaterial({
-          color: 0x2a2a2a,
+        // Material 1: Standard Frame
+        const frameMat = new THREE.MeshPhysicalMaterial({
+          color: 0x18181b, // Dark charcoal
+          metalness: 0.6,
           roughness: 0.3,
-          metalness: 0.7,
+          clearcoat: 1.0,
+          transparent: true,
+          opacity: 0.85, // Just slightly transparent as a fallback if everything is one mesh
         });
+
+        // Material 2: Pure Clear Glass for Lenses
+        const lensMat = new THREE.MeshPhysicalMaterial({
+          color: 0xffffff,
+          transmission: 1.0,     // 100% transparent refraction
+          opacity: 1.0,          // Opacity must be 1.0 for physical transmission to look right
+          metalness: 0.1,
+          roughness: 0.05,       // Smooth, clear glass
+          ior: 1.5,              // Refractive index of glass
+          thickness: 0.2,        // Volumetric thickness
+          transparent: true,
+        });
+
+        const box = new THREE.Box3().setFromObject(obj);
+        const center = box.getCenter(new THREE.Vector3());
+        const size = box.getSize(new THREE.Vector3());
+
         obj.traverse((child: any) => {
           if (child.isMesh) {
-            child.material = defaultMat;
+            const name = child.name.toLowerCase();
+            // Automatically detect if this specific mesh is a lens
+            if (name.includes("lens") || name.includes("glass") || name.includes("lenses")) {
+              child.material = lensMat;
+            } else {
+              child.material = frameMat;
+            }
+            
             child.castShadow = true;
             child.receiveShadow = true;
+            
+            // 1. Shift vertices directly to perfect center
+            child.geometry.translate(-center.x, -center.y, -center.z);
+            // 2. Fix the upside-down issue by baking the Z rotation into the geometry
+            child.geometry.rotateZ(Math.PI);
           }
         });
 
-        // 1. Center the model exactly.
-        const box = new THREE.Box3().setFromObject(obj);
-        const center = box.getCenter(new THREE.Vector3());
-        
-        // Set the inverse center offset at the parent 'obj' transform
-        obj.position.set(-center.x, -center.y, -center.z);
-        
-        // Setup orientation holder because these models are exported upside down (Y-axis inverted constraint)
-        const objHolder = new THREE.Group();
-        objHolder.add(obj);
-        objHolder.rotation.z = Math.PI;
-
-        // Add it to unscaled wrapper, which makes the wrapper's local (0,0,0) the center of the glasses
-        scaleWrapper.add(objHolder);
-
-        // 2. Normalize the scale wrapper bounding box to exactly 1.0 unit width
-        // By normalizing based purely on size.x (the width of the glasses), we ensure the glasses frame scales 
-        // horizontally to exactly match the tracked face width, ignoring variations in stem depth or Y-height!
-        const size = box.getSize(new THREE.Vector3());
         if (size.x > 0) {
-          scaleWrapper.scale.setScalar(1 / size.x);
+          obj.scale.setScalar(1 / size.x);
         }
 
-        // 3. Mount fully centered wrapper to the group controlled by the Try-On face tracker loop.
-        mainGroup.add(scaleWrapper);
+        mainGroup.add(obj);
         mainGroup.visible = false;
         
         sceneRef.current!.add(mainGroup);
         glassesGroupRef.current = mainGroup;
         setModelLoading(false);
-        console.log("Model loaded successfully:", modelPath);
       },
-      (progress) => {
-        if (progress.total) {
-          console.log(`Loading ${fileName}: ${Math.round((progress.loaded / progress.total) * 100)}%`);
-        }
-      },
+      undefined,
       (err) => {
-        console.error("OBJ load error for:", modelPath, err);
+        console.error("OBJ load error:", err);
         setModelLoading(false);
       },
     );
@@ -405,17 +397,15 @@ export default function TryOnPage() {
       setWebcamError(null);
     } catch (e) {
       console.error("Webcam error:", e);
-      setWebcamError("Camera access denied. Please allow camera access and reload.");
+      setWebcamError("Camera access denied.");
     }
   }, []);
 
   // ── Feedback handler ──────────────────────────────────────────────────────
   const handleFeedback = async (liked: boolean) => {
     if (!data || !activeGlass) return;
-    if (votedGlasses.includes(activeGlass.glass_id)) {
-      alert("You've already voted on these glasses!");
-      return;
-    }
+    if (votedGlasses.includes(activeGlass.glass_id)) return;
+    
     const featuresDict = JSON.parse(sessionStorage.getItem("user_features") || "{}");
     const featuresArray = [
       featuresDict.cheek_jaw_ratio || 1.0,
@@ -430,10 +420,8 @@ export default function TryOnPage() {
         liked,
       });
       setVotedGlasses((prev) => [...prev, activeGlass.glass_id]);
-      alert(`Feedback saved! You ${liked ? "liked" : "disliked"} these glasses.`);
     } catch (err) {
       console.error(err);
-      alert("Error saving feedback.");
     }
   };
 
@@ -442,7 +430,6 @@ export default function TryOnPage() {
       <div className="flex items-center justify-center h-screen bg-[#0a0a0f] text-white">
         <div className="text-center space-y-3">
           <div className="w-10 h-10 border-2 border-white/20 border-t-white rounded-full animate-spin mx-auto" />
-          <p className="text-sm tracking-widest uppercase text-white/50">Loading AI matches…</p>
         </div>
       </div>
     );
@@ -453,7 +440,7 @@ export default function TryOnPage() {
       style={{ fontFamily: "'DM Sans', sans-serif" }}
       className="flex h-screen bg-[#09090e] text-white overflow-hidden"
     >
-      <div className="flex-1 flex flex-col">
+      <div className="flex-1 flex flex-col relative">
         <div className="flex items-center justify-between px-6 py-4 border-b border-white/5">
           <div className="flex items-center gap-3">
             <div
@@ -473,15 +460,12 @@ export default function TryOnPage() {
         <div ref={containerRef} className="relative flex-1 bg-black overflow-hidden">
           {webcamError && (
             <div className="absolute inset-0 flex items-center justify-center z-20 bg-black/80">
-              <div className="text-center space-y-3 px-8">
-                <p className="text-red-400 text-sm">{webcamError}</p>
-                <button
-                  onClick={retryWebcam}
-                  className="px-5 py-2 bg-white text-black text-xs font-bold rounded-full"
-                >
-                  Retry Camera
-                </button>
-              </div>
+              <button
+                onClick={retryWebcam}
+                className="px-5 py-2 bg-white text-black text-xs font-bold rounded-full"
+              >
+                Retry Camera
+              </button>
             </div>
           )}
 
@@ -498,23 +482,17 @@ export default function TryOnPage() {
             className="absolute inset-0 w-full h-full pointer-events-none"
             style={{ transform: "scaleX(-1)" }}
           />
-
-          {["top-4 left-4", "top-4 right-4", "bottom-4 left-4", "bottom-4 right-4"].map(
-            (pos, i) => (
-              <div key={i} className={`absolute ${pos} w-6 h-6 pointer-events-none`}>
-                <div
-                  className="absolute border-white/30"
-                  style={{
-                    width: 20,
-                    height: 20,
-                    borderTopWidth: i < 2 ? 1.5 : 0,
-                    borderBottomWidth: i >= 2 ? 1.5 : 0,
-                    borderLeftWidth: i % 2 === 0 ? 1.5 : 0,
-                    borderRightWidth: i % 2 === 1 ? 1.5 : 0,
-                  }}
-                />
-              </div>
-            ),
+          
+          {/* Flip Model Orientation Button */}
+          {status === "Ready" && !modelLoading && (
+            <button
+              onClick={handleFlipModel}
+              className="absolute bottom-6 right-6 px-4 py-2 bg-white/10 hover:bg-white/20 
+                rounded-full text-xs font-medium text-white backdrop-blur-md border border-white/20 
+                transition-all z-10 flex items-center gap-2"
+            >
+              <span>🔄</span> {isFlipped ? "Unflip Glasses" : "Flip Glasses 180°"}
+            </button>
           )}
         </div>
 
@@ -526,7 +504,7 @@ export default function TryOnPage() {
               text-sm font-medium text-white/60 hover:border-red-500/50 hover:text-red-400
               disabled:opacity-30 disabled:cursor-not-allowed transition-all duration-200"
           >
-            <span className="text-base">👎</span> Dislike
+            👎 Dislike
           </button>
           <button
             disabled={!activeGlass || votedGlasses.includes(activeGlass?.glass_id)}
@@ -535,7 +513,7 @@ export default function TryOnPage() {
               text-sm font-medium text-white/60 hover:border-emerald-500/50 hover:text-emerald-400
               disabled:opacity-30 disabled:cursor-not-allowed transition-all duration-200"
           >
-            <span className="text-base">👍</span> Like
+            👍 Like
           </button>
         </div>
       </div>
@@ -553,7 +531,6 @@ export default function TryOnPage() {
         <div className="flex-1 overflow-y-auto px-4 py-4 space-y-2">
           {data.top_matches.map((glass: any, idx: number) => {
             const isActive = activeGlass?.glass_id === glass.glass_id;
-            const hasVoted = votedGlasses.includes(glass.glass_id);
             return (
               <button
                 key={glass.glass_id}
@@ -564,42 +541,17 @@ export default function TryOnPage() {
                     : "border-white/5 hover:border-white/10 hover:bg-white/[0.03]"
                 }`}
               >
-                <div className="flex items-center justify-between mb-1">
-                  <div className="flex items-center gap-2">
-                    <span className="text-[10px] text-white/20 font-mono w-4">
-                      {String(idx + 1).padStart(2, "0")}
-                    </span>
-                    <span className="text-sm font-medium text-white/80 truncate">
-                      {glass.name}
-                    </span>
-                  </div>
-                  {hasVoted && (
-                    <span className="text-[10px] text-white/20">✓ voted</span>
-                  )}
-                </div>
-
-                <div className="ml-6">
-                  <div className="flex items-center gap-2">
-                    <div className="flex-1 h-[2px] bg-white/5 rounded-full overflow-hidden">
-                      <div
-                        className="h-full bg-white/30 rounded-full transition-all duration-500"
-                        style={{ width: `${(glass.score * 100).toFixed(0)}%` }}
-                      />
-                    </div>
-                    <span className="text-[10px] text-white/30 font-mono">
-                      {(glass.score * 100).toFixed(0)}%
-                    </span>
-                  </div>
+                <div className="flex items-center gap-2 mb-1">
+                  <span className="text-[10px] text-white/20 font-mono w-4">
+                    {String(idx + 1).padStart(2, "0")}
+                  </span>
+                  <span className="text-sm font-medium text-white/80 truncate">
+                    {glass.name}
+                  </span>
                 </div>
               </button>
             );
           })}
-        </div>
-
-        <div className="px-6 py-4 border-t border-white/5">
-          <p className="text-[10px] text-white/20 text-center leading-relaxed">
-            Live AR · 478-point face mesh
-          </p>
         </div>
       </div>
     </div>
