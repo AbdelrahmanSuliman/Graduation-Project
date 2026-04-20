@@ -195,10 +195,135 @@ def evaluate_metrics(glasses_db, model, num_items):
     print("\n--- FINAL RESULTS ---")
     print(f"Hit Ratio (HR@{K}): {hr_k:.4f} ({hr_k * 100:.2f}% accuracy)")
     print(f"NDCG@{K}: {ndcg_k:.4f}")
+
+def test_robustness(glasses_db, model, num_items, noise_level=0.05):
+    """
+    Tests if the model still performs well when the user's face measurements 
+    are slightly "noisy" or imperfect (simulating real-world camera inaccuracies).
+    """
+    print("\n" + "="*50)
+    print(f" STRESS TEST: ROBUSTNESS TO NOISE (+/- {noise_level*100}%)")
+    print("="*50)
+    
+    hits = 0
+    
+    # Pre-build items (Same as before)
+    item_list = []
+    for i in range(num_items):
+        g = glasses_db.get(str(i), {})
+        item_list.append({
+            "id": i, "shape_id": g.get("shape_id", -1), "width": g.get("width", 0.5), "height": g.get("height", 0.5),
+            "feats": [g.get("width", 0.5), g.get("height", 0.5), g.get("bridge_pos", 0.5), g.get("normalized_material", 0.0), g.get("normalized_rim", 0.0)]
+        })
+    item_feat_tensor = torch.tensor([item["feats"] for item in item_list], dtype=torch.float32)
+    item_ids_tensor = torch.tensor(range(num_items))
+
+    for user in range(TEST_USERS):
+        u_shape = np.random.randint(0, NUM_SHAPES)
+        # 1. Base clean vector to calculate the "True" perfect item
+        clean_u_vec = [np.random.uniform(0.7, 1.3) for _ in range(3)]
+        
+        true_scores = []
+        for item in item_list:
+            score = 0.4
+            if u_shape == 1 and item["height"] > 0.55: score += 0.4
+            if u_shape == 3 and item["shape_id"] in [2, 4]: score += 0.4
+            if u_shape == 0 and item["shape_id"] in [0, 4]: score += 0.4
+            if u_shape == 2: score += 0.4
+            if u_shape == 4:
+                if item["shape_id"] in [1, 0]: score += 0.6
+                elif item["shape_id"] == 2: score -= 0.4
+            width_diff = abs(clean_u_vec[1] - item["width"])
+            if width_diff < 0.15: score += 0.3
+            elif width_diff > 0.25: score -= 0.3
+            true_scores.append((item["id"], score))
+            
+        max_true_score = max(s[1] for s in true_scores)
+        target_item_ids = [s[0] for s in true_scores if s[1] == max_true_score]
+        
+        # 2. NOISE INJECTION: Simulate a slightly inaccurate camera scan
+        noisy_u_vec = [val + np.random.normal(0, noise_level) for val in clean_u_vec]
+        
+        shape_tensor = torch.tensor([u_shape] * num_items)
+        engineered_client_feats = []
+        for item in item_list:
+            # The model has to predict using the NOISY data
+            diff = abs(noisy_u_vec[1] - item["width"])
+            engineered_client_feats.append(noisy_u_vec + [diff])
+            
+        client_feat_tensor = torch.tensor(engineered_client_feats, dtype=torch.float32)
+        
+        with torch.no_grad():
+            predictions = model(shape_tensor, item_ids_tensor, client_feat_tensor, item_feat_tensor)
+        
+        top_k_preds = torch.argsort(-predictions).tolist()[:K]
+        if any(t_id in top_k_preds for t_id in target_item_ids):
+            hits += 1
+
+    hr_k = hits / TEST_USERS
+    print(f"Hit Ratio with {noise_level*100}% Noise: {hr_k:.4f} ({hr_k * 100:.2f}%)")
+    if hr_k > 0.85:
+        print("✅ Excellent! The model generalized the rules and didn't overfit to exact numbers.")
+    else:
+        print("❌ Model may be overfitting. It broke down when given slight variations.")
+
+
+def test_catalog_coverage(glasses_db, model, num_items):
+    """
+    Checks if the model is recommending a healthy variety of glasses, 
+    or if it is stuck recommending the exact same 5 pairs to everyone.
+    """
+    print("\n" + "="*50)
+    print(" SANITY CHECK: CATALOG COVERAGE / DIVERSITY")
+    print("="*50)
+    
+    recommended_items = set()
+    
+    item_feats_list = []
+    for i in range(num_items):
+        g = glasses_db.get(str(i), {})
+        item_feats_list.append([g.get("width", 0.5), g.get("height", 0.5), g.get("bridge_pos", 0.5), g.get("normalized_material", 0.0), g.get("normalized_rim", 0.0)])
+    item_feat_tensor = torch.tensor(item_feats_list, dtype=torch.float32)
+    item_ids_tensor = torch.tensor(range(num_items))
+
+    for user in range(TEST_USERS):
+        u_shape = np.random.randint(0, NUM_SHAPES)
+        u_vec = [np.random.uniform(0.7, 1.3) for _ in range(3)]
+        
+        shape_tensor = torch.tensor([u_shape] * num_items)
+        engineered_client_feats = []
+        for i, item_feats in enumerate(item_feats_list):
+            diff = abs(u_vec[1] - item_feats[0]) # u_vec width - item width
+            engineered_client_feats.append(u_vec + [diff])
+            
+        client_feat_tensor = torch.tensor(engineered_client_feats, dtype=torch.float32)
+        
+        with torch.no_grad():
+            predictions = model(shape_tensor, item_ids_tensor, client_feat_tensor, item_feat_tensor)
+        
+        top_k_preds = torch.argsort(-predictions).tolist()[:K]
+        
+        # Add the recommended items to our unique set
+        for item_id in top_k_preds:
+            recommended_items.add(item_id)
+
+    coverage_percentage = (len(recommended_items) / num_items) * 100
+    print(f"Total Unique Items Recommended: {len(recommended_items)} out of {num_items}")
+    print(f"Catalog Coverage: {coverage_percentage:.1f}%")
+    
+    if coverage_percentage > 50:
+        print("✅ Healthy Diversity! The model uses a good variety of your catalog.")
+    else:
+        print("⚠️ Warning: Low Coverage. The model relies heavily on a small subset of glasses.")
 if __name__ == "__main__":
     try:
         db, model, num_items = load_environment()
         test_rule_adherence(db, model, num_items)
         evaluate_metrics(db, model, num_items)
+        
+        # --- NEW TESTS ---
+        test_robustness(db, model, num_items, noise_level=0.05)
+        test_catalog_coverage(db, model, num_items)
+        
     except Exception as e:
         print(f"Error running tests: {e}")

@@ -535,20 +535,23 @@ export default function TryOnPage() {
               <button
                 key={glass.glass_id}
                 onClick={() => setActiveGlass(glass)}
-                className={`w-full text-left p-3.5 rounded-xl border transition-all duration-200 ${
+                className={`group w-full flex items-center justify-between px-4 py-3 rounded-lg border transition-all duration-200 ${
                   isActive
-                    ? "border-white/20 bg-white/5"
-                    : "border-white/5 hover:border-white/10 hover:bg-white/[0.03]"
+                    ? "border-emerald-500/30 bg-emerald-500/10 shadow-sm"
+                    : "border-white/5 hover:border-white/15 hover:bg-white/5"
                 }`}
               >
-                <div className="flex items-center gap-2 mb-1">
-                  <span className="text-[10px] text-white/20 font-mono w-4">
+                <div className="flex items-center gap-3 overflow-hidden">
+                  <span className={`text-xs font-mono shrink-0 ${isActive ? "text-emerald-400" : "text-white/30 group-hover:text-white/50"}`}>
                     {String(idx + 1).padStart(2, "0")}
                   </span>
-                  <span className="text-sm font-medium text-white/80 truncate">
+                  <span className={`text-sm font-medium truncate ${isActive ? "text-white" : "text-white/60 group-hover:text-white/90"}`}>
                     {glass.name}
                   </span>
                 </div>
+                {isActive && (
+                  <div className="w-1.5 h-1.5 rounded-full bg-emerald-400 shrink-0" />
+                )}
               </button>
             );
           })}
